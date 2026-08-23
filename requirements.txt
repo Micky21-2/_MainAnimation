@@ -1,0 +1,7 @@
+numpy
+pandas
+scipy
+opencv-python
+matplotlib
+requests
+faster-whisper

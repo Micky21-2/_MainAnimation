@@ -1,35 +1,10 @@
-"""
-preview_detection.py
-======================
-Creates a copy of the source video with the detected segment info burned in
-as an on-screen label (top of frame) throughout -- e.g. "Segment 12 [SLIDE]
-145.0s - 160.0s". Play it once, full speed or scrubbing, and watch whether
-the label changes exactly when the real content actually changes on screen.
-This is the fastest way to eyeball whether detection timing/boundaries are
-accurate across a WHOLE video, instead of opening many separate clips.
-
-Works with either segments.csv (no type) or segments_classified.csv (with
-slide/demo type) -- type is shown in the label automatically if present.
-
-USAGE:
-    python preview_detection.py \\
-        --segments path/to/segments.csv \\
-        --video path/to/source_video.mp4 \\
-        --output path/to/preview.mp4
-
-Optional: --scale-width to shrink the output for a smaller/faster file
-(detection accuracy doesn't need full resolution to verify visually).
-"""
-
 import os
 import csv
 import argparse
 import subprocess
 
-
 def run(cmd):
     subprocess.run(cmd, check=True)
-
 
 def format_timestamp(seconds: float) -> str:
     millis = int(round(seconds * 1000))
@@ -40,7 +15,6 @@ def format_timestamp(seconds: float) -> str:
     secs = millis // 1000
     millis %= 1000
     return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
-
 
 def load_segments(csv_path: str):
     segments = []
@@ -56,7 +30,6 @@ def load_segments(csv_path: str):
             })
     return segments
 
-
 def build_label_srt(segments, srt_path):
     with open(srt_path, "w", encoding="utf-8") as f:
         for i, seg in enumerate(segments, start=1):
@@ -66,11 +39,9 @@ def build_label_srt(segments, srt_path):
             f.write(f"{format_timestamp(seg['start_sec'])} --> {format_timestamp(seg['end_sec'])}\n")
             f.write(f"{text}\n\n")
 
-
 def escape_path(path: str) -> str:
     abs_path = os.path.abspath(path)
     return abs_path.replace("\\", "/").replace(":", "\\:")
-
 
 def main():
     parser = argparse.ArgumentParser(description="Burn detected segment info onto the source video for visual accuracy checking.")

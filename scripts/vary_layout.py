@@ -1,47 +1,8 @@
-"""
-vary_layout.py
-
-Adds controlled side changes to an existing lecture timeline.
-
-Behavior:
-    - Character starts on the LEFT.
-    - After --side-flip-threshold seconds of cumulative SLIDE time,
-      the character changes to the other side.
-    - Every side change is wrapped in two smooth crossfades:
-          split-screen -> full-screen anchor
-          full-screen anchor -> split-screen on the new side
-    - Side-change anchors alternate:
-          1st -> full-screen character
-          2nd -> full-screen slide
-          3rd -> full-screen character
-          4th -> full-screen slide
-          ...
-    - Full-screen character duration defaults to 5 seconds.
-    - Full-screen slide duration defaults to 10 seconds.
-    - Crossfade duration defaults to 1.5 seconds.
-    - Demo entries are copied unchanged and do NOT count toward the
-      side-change threshold.
-
-The output timeline uses ONE consistent format throughout:
-    {"type": ..., "start": ..., "duration": ...}
-
-Transition entries use:
-    {
-        "type": "transition",
-        "start": ...,
-        "duration": ...,
-        "from": {...},
-        "to": {...}
-    }
-"""
-
 import argparse
 import json
 
-
 def flip_side(side):
     return "right" if side == "left" else "left"
-
 
 def get_anchor_type(side_swap_count, transition_anchor):
     if transition_anchor == "character":
@@ -50,12 +11,10 @@ def get_anchor_type(side_swap_count, transition_anchor):
         return "slide_full"
     return "character" if side_swap_count % 2 == 1 else "slide_full"
 
-
 def build_anchor(anchor_type, image):
     if anchor_type == "character":
         return {"type": "character"}
     return {"type": "slide_full", "image": image}
-
 
 def vary_timeline(
     timeline,

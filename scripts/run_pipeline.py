@@ -31,14 +31,12 @@ You can also run each phase independently by calling the individual scripts
 directly — see the printed commands as this script runs, or the pipeline
 README, for the equivalent standalone invocations.
 """
-
 import os
 import sys
 import argparse
 import subprocess
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-
 
 def run_step(description, cmd):
     print(f"\n{'=' * 60}")
@@ -49,7 +47,6 @@ def run_step(description, cmd):
     if result.returncode != 0:
         print(f"\nERROR: step failed -> {description}")
         sys.exit(1)
-
 
 def main():
     parser = argparse.ArgumentParser(description="Run the full lecture pipeline end to end.")
