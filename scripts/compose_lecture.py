@@ -2,41 +2,42 @@
 compose_lecture.py
 ==================
 
-Combines a talking-head video with a timeline containing:
+Compose:
+
+    talking-head video
+        +
+    slide/demo timeline
+        +
+    full-screen transition anchors
+        +
+    crossfades
+        +
+    subtitles
+
+Supported timeline types:
 
     slide
     slide_full
     character
-    transition
     demo
+    transition
 
-The timeline is produced by build_slide_timeline.py and vary_layout.py.
+All timeline entries MUST use:
 
-Important behavior
-------------------
+    start
+    duration
 
-Normal slide:
-    [ talking head | slide ]
-    or
-    [ slide | talking head ]
+Transition format:
 
-Full-screen character:
-    Entire talking-head frame is fitted inside the canvas.
-    NO crop is performed.
+    {
+        "type": "transition",
+        "start": ...,
+        "duration": ...,
+        "from": {...},
+        "to": {...}
+    }
 
-Full-screen slide:
-    Slide fills the entire canvas using cover/crop.
-
-Transition:
-    Two complete layouts are rendered over the same time interval and
-    crossfaded using FFmpeg xfade.
-
-Audio:
-    Video segments are rendered WITHOUT audio.
-    The original continuous talking-head audio is attached at the end.
-
-Subtitles:
-    A dedicated bottom subtitle bar is reserved when subtitles are enabled.
+The original talking-head audio is attached at the end.
 """
 
 import os
@@ -46,342 +47,355 @@ import argparse
 import subprocess
 
 
-# =========================================================================
-# BASIC COMMAND RUNNER
-# =========================================================================
+# ============================================================
+# COMMAND RUNNER
+# ============================================================
 
 def run(cmd):
-    print(" ".join(str(x) for x in cmd))
-    subprocess.run(cmd, check=True)
+
+    print(
+        " ".join(str(x) for x in cmd)
+    )
+
+    subprocess.run(
+        cmd,
+        check=True
+    )
 
 
-# =========================================================================
+# ============================================================
 # VIDEO DURATION
-# =========================================================================
+# ============================================================
 
 def get_video_duration(path):
-    cmd = [
-        "ffprobe",
-        "-v", "quiet",
-        "-print_format", "json",
-        "-show_format",
-        path,
-    ]
 
     result = subprocess.run(
-        cmd,
+        [
+            "ffprobe",
+            "-v",
+            "quiet",
+            "-print_format",
+            "json",
+            "-show_format",
+            path,
+        ],
         capture_output=True,
         text=True,
         check=True,
     )
 
-    info = json.loads(result.stdout)
+    info = json.loads(
+        result.stdout
+    )
 
-    return float(info["format"]["duration"])
+    return float(
+        info["format"]["duration"]
+    )
 
 
-# =========================================================================
-# TIMELINE LOADING
-# =========================================================================
+# ============================================================
+# TIMELINE LOADER
+# ============================================================
 
-def load_composite_timeline(path, total_duration):
+def load_composite_timeline(
+    path,
+    total_duration
+):
 
-    with open(path, "r", encoding="utf-8") as f:
+    print(
+        f"Loading timeline JSON: {path}"
+    )
+
+    with open(
+        path,
+        "r",
+        encoding="utf-8"
+    ) as f:
+
         entries = json.load(f)
 
     if not entries:
-        raise ValueError("Timeline is empty.")
 
-    print(f"  Raw timeline entries: {len(entries)}")
-
-    # ---------------------------------------------------------------------
-    # Legacy timeline
-    # ---------------------------------------------------------------------
-
-    if "type" not in entries[0]:
-
-        entries = sorted(
-            entries,
-            key=lambda e: float(e["start"]),
+        raise ValueError(
+            "Timeline is empty."
         )
 
-        timeline = []
+    print(
+        f"  Raw timeline entries: "
+        f"{len(entries)}"
+    )
 
-        for i, e in enumerate(entries):
+    normalized = []
 
-            start = float(e["start"])
+    for i, entry in enumerate(entries):
 
-            if i + 1 < len(entries):
-                end = float(entries[i + 1]["start"])
-            else:
-                end = total_duration
+        e = dict(entry)
 
-            timeline.append({
-                "type": "slide",
-                "image": e["image"],
-                "start": start,
-                "duration": max(end - start, 0.05),
-                "side": e.get("side", "left"),
-            })
-
-        return timeline
-
-    # ---------------------------------------------------------------------
-    # New timeline
-    # ---------------------------------------------------------------------
-
-    timeline = []
-
-    for index, raw in enumerate(entries):
-
-        e = dict(raw)
-
-        # -------------------------------------------------------------
-        # Normalize start/duration.
-        #
-        # Some older versions used:
-        #
-        #     start_sec
-        #     duration_sec
-        #
-        # The current vary_layout.py uses:
-        #
-        #     start
-        #     duration
-        #
-        # Accept both so old timelines do not break.
-        # -------------------------------------------------------------
+        # ----------------------------------------------------
+        # Only the standard format is accepted.
+        # ----------------------------------------------------
 
         if "start" not in e:
 
-            if "start_sec" in e:
-                e["start"] = float(e["start_sec"])
+            # Give a useful error instead of the old
+            # KeyError: 'start'.
 
-            else:
-                raise ValueError(
-                    f"Timeline entry {index} has no 'start'. "
-                    f"Entry: {e}"
-                )
+            raise ValueError(
+                f"Timeline entry {i} has no "
+                f"'start'. Entry: {e}"
+            )
 
         if "duration" not in e:
 
-            if "duration_sec" in e:
-                e["duration"] = float(e["duration_sec"])
+            raise ValueError(
+                f"Timeline entry {i} has no "
+                f"'duration'. Entry: {e}"
+            )
 
-            elif "end_sec" in e:
-                e["duration"] = (
-                    float(e["end_sec"])
-                    - float(e["start"])
-                )
+        if "type" not in e:
 
-            else:
-                raise ValueError(
-                    f"Timeline entry {index} has no 'duration'. "
-                    f"Entry: {e}"
-                )
+            raise ValueError(
+                f"Timeline entry {i} has no "
+                f"'type'. Entry: {e}"
+            )
 
-        e["start"] = float(e["start"])
-        e["duration"] = float(e["duration"])
+        e["start"] = float(
+            e["start"]
+        )
+
+        e["duration"] = float(
+            e["duration"]
+        )
 
         if e["duration"] <= 0:
+
             raise ValueError(
-                f"Timeline entry {index} has invalid duration: "
-                f"{e['duration']}"
+                f"Timeline entry {i} has "
+                f"non-positive duration: {e}"
             )
 
-        etype = e.get("type")
+        # ----------------------------------------------------
+        # Check timeline entry types.
+        # ----------------------------------------------------
 
-        if not etype:
-            raise ValueError(
-                f"Timeline entry {index} has no 'type'. "
-                f"Entry: {e}"
-            )
+        etype = e["type"]
 
-        # -------------------------------------------------------------
-        # Normalize transition endpoint descriptions.
-        #
-        # Current vary_layout.py already creates:
-        #
-        #     {
-        #       "type": "slide",
-        #       "image": "...",
-        #       "side": "left"
-        #     }
-        #
-        # This also supports older layout strings.
-        # -------------------------------------------------------------
+        if etype == "slide":
 
-        if etype == "transition":
+            if not e.get("image"):
 
-            for key in ("from", "to"):
-
-                if key not in e:
-                    raise ValueError(
-                        f"Transition entry {index} has no '{key}'."
-                    )
-
-                desc = e[key]
-
-                if not isinstance(desc, dict):
-                    raise ValueError(
-                        f"Transition entry {index} '{key}' "
-                        f"must be an object."
-                    )
-
-                if "type" not in desc:
-
-                    layout = desc.get("layout")
-
-                    if layout == "character_fullscreen":
-                        desc["type"] = "character"
-
-                    elif layout == "slide_fullscreen":
-                        desc["type"] = "slide_full"
-
-                    elif layout == "slide_left":
-                        desc["type"] = "slide"
-                        desc.setdefault("side", "left")
-
-                    elif layout == "slide_right":
-                        desc["type"] = "slide"
-                        desc.setdefault("side", "right")
-
-                    else:
-                        raise ValueError(
-                            f"Transition entry {index} has no type "
-                            f"for '{key}'. Entry: {e}"
-                        )
-
-        # -------------------------------------------------------------
-        # Validate files
-        # -------------------------------------------------------------
-
-        if etype in ("slide", "slide_full"):
-
-            image = e.get("image")
-
-            if not image:
                 raise ValueError(
-                    f"Timeline entry {index} ({etype}) "
-                    f"has no image."
+                    f"Slide entry {i} has no image."
                 )
 
-            if not os.path.exists(image):
+            if not os.path.exists(
+                e["image"]
+            ):
+
                 raise FileNotFoundError(
-                    f"Slide image not found: {image}"
+                    f"Slide image not found: "
+                    f"{e['image']}"
                 )
 
-        elif etype == "demo":
+        elif etype == "slide_full":
 
-            video = e.get("video")
+            if not e.get("image"):
 
-            if not video:
                 raise ValueError(
-                    f"Timeline entry {index} (demo) "
-                    f"has no video."
+                    f"Full-screen slide entry "
+                    f"{i} has no image."
                 )
 
-            if not os.path.exists(video):
+            if not os.path.exists(
+                e["image"]
+            ):
+
                 raise FileNotFoundError(
-                    f"Demo clip not found: {video}"
+                    f"Full-screen slide image "
+                    f"not found: {e['image']}"
                 )
 
         elif etype == "character":
+
             pass
+
+        elif etype == "demo":
+
+            if not e.get("video"):
+
+                raise ValueError(
+                    f"Demo entry {i} has no video."
+                )
+
+            if not os.path.exists(
+                e["video"]
+            ):
+
+                raise FileNotFoundError(
+                    f"Demo video not found: "
+                    f"{e['video']}"
+                )
 
         elif etype == "transition":
 
-            for key in ("from", "to"):
+            from_desc = e.get("from")
 
-                desc = e[key]
+            to_desc = e.get("to")
 
-                dtype = desc["type"]
+            if not isinstance(
+                from_desc,
+                dict
+            ):
 
-                if dtype == "slide":
+                raise ValueError(
+                    f"Transition entry {i} "
+                    f"has invalid 'from': {from_desc}"
+                )
 
-                    image = desc.get("image")
+            if not isinstance(
+                to_desc,
+                dict
+            ):
 
-                    if not image:
-                        raise ValueError(
-                            f"Transition entry {index} "
-                            f"'{key}' slide has no image."
-                        )
+                raise ValueError(
+                    f"Transition entry {i} "
+                    f"has invalid 'to': {to_desc}"
+                )
 
-                    if not os.path.exists(image):
-                        raise FileNotFoundError(
-                            f"Transition slide image not found: "
-                            f"{image}"
-                        )
+            validate_transition_endpoint(
+                from_desc,
+                i,
+                "from"
+            )
 
-                elif dtype == "slide_full":
-
-                    image = desc.get("image")
-
-                    if not image:
-                        raise ValueError(
-                            f"Transition entry {index} "
-                            f"'{key}' slide_full has no image."
-                        )
-
-                    if not os.path.exists(image):
-                        raise FileNotFoundError(
-                            f"Transition slide image not found: "
-                            f"{image}"
-                        )
-
-                elif dtype == "character":
-                    pass
-
-                else:
-                    raise ValueError(
-                        f"Unknown transition endpoint type "
-                        f"'{dtype}' in entry {index}."
-                    )
+            validate_transition_endpoint(
+                to_desc,
+                i,
+                "to"
+            )
 
         else:
 
             raise ValueError(
-                f"Unknown timeline entry type '{etype}' "
-                f"at entry {index}."
+                f"Unknown timeline type "
+                f"'{etype}' at entry {i}"
             )
 
-        # -------------------------------------------------------------
-        # Duration validation
-        # -------------------------------------------------------------
+        # ----------------------------------------------------
+        # Duration bounds
+        # ----------------------------------------------------
 
-        end = e["start"] + e["duration"]
-
-        if e["start"] > total_duration + 0.1:
+        if e["start"] < -0.001:
 
             raise ValueError(
-                f"Timeline entry {index} starts at "
-                f"{e['start']:.3f}s, after video duration "
-                f"{total_duration:.3f}s."
+                f"Timeline entry {i} starts "
+                f"before zero: {e}"
             )
 
-        if end > total_duration + 0.5:
+        if (
+            e["start"] + e["duration"]
+            > total_duration + 1.0
+        ):
 
-            print(
-                f"WARNING: timeline entry {index} ends at "
-                f"{end:.3f}s, slightly after video duration "
-                f"{total_duration:.3f}s."
+            raise ValueError(
+                f"Timeline entry {i} extends "
+                f"past video duration.\n"
+                f"Entry: {e}\n"
+                f"Video duration: "
+                f"{total_duration:.3f}s"
             )
 
-        timeline.append(e)
+        normalized.append(e)
 
-    timeline.sort(key=lambda e: e["start"])
+    # --------------------------------------------------------
+    # Sort
+    # --------------------------------------------------------
+
+    normalized.sort(
+        key=lambda e: e["start"]
+    )
 
     print(
         f"  Normalized timeline entries: "
-        f"{len(timeline)}"
+        f"{len(normalized)}"
     )
 
-    return timeline
+    return normalized
 
 
-# =========================================================================
+# ============================================================
+# TRANSITION VALIDATION
+# ============================================================
+
+def validate_transition_endpoint(
+    desc,
+    index,
+    label
+):
+
+    etype = desc.get("type")
+
+    if not etype:
+
+        raise ValueError(
+            f"Transition entry {index} "
+            f"has no type for '{label}'."
+        )
+
+    if etype == "slide":
+
+        if not desc.get("image"):
+
+            raise ValueError(
+                f"Transition entry {index} "
+                f"'{label}' slide has no image."
+            )
+
+        if not os.path.exists(
+            desc["image"]
+        ):
+
+            raise FileNotFoundError(
+                f"Transition entry {index} "
+                f"'{label}' slide image not found: "
+                f"{desc['image']}"
+            )
+
+    elif etype == "slide_full":
+
+        if not desc.get("image"):
+
+            raise ValueError(
+                f"Transition entry {index} "
+                f"'{label}' slide_full has no image."
+            )
+
+        if not os.path.exists(
+            desc["image"]
+        ):
+
+            raise FileNotFoundError(
+                f"Transition entry {index} "
+                f"'{label}' slide_full image "
+                f"not found: {desc['image']}"
+            )
+
+    elif etype == "character":
+
+        pass
+
+    else:
+
+        raise ValueError(
+            f"Transition entry {index} "
+            f"'{label}' has unsupported type: "
+            f"{etype}"
+        )
+
+
+# ============================================================
 # PATH ESCAPING
-# =========================================================================
+# ============================================================
 
 def escape_path(path):
 
@@ -395,28 +409,17 @@ def escape_path(path):
     )
 
 
-# =========================================================================
-# COVER SCALE
-# =========================================================================
+# ============================================================
+# COVER FILTER
+# ============================================================
 
 def cover_filter(
     width,
     height,
     fps,
     input_label,
-    output_label,
+    output_label
 ):
-    """
-    Cover the complete rectangle.
-
-    This intentionally crops the source.
-
-    Used for:
-        - split-screen talking head
-        - split-screen slide
-        - full-screen slide
-        - demo
-    """
 
     return (
         f"[{input_label}]"
@@ -430,9 +433,9 @@ def cover_filter(
     )
 
 
-# =========================================================================
+# ============================================================
 # CHARACTER FIT
-# =========================================================================
+# ============================================================
 
 def character_fit_filter(
     width,
@@ -440,38 +443,39 @@ def character_fit_filter(
     fps,
     input_label,
     output_label,
-    character_scale=0.78,
+    character_scale=0.78
 ):
     """
-    Fit the ENTIRE talking-head frame into the full-screen canvas.
+    Fit the complete talking-head frame into the canvas.
 
-    IMPORTANT:
-        This filter NEVER crops the character.
-
-    The source is first fitted into a smaller safe rectangle and then
-    padded onto the full output canvas.
-
-    character_scale:
-        1.0 = maximum possible fit
-        0.78 = safer visual size
-        0.70 = smaller character
-
-    This is intentionally different from cover_filter().
+    Unlike cover(), this NEVER crops the character.
     """
 
+    safe_width = int(
+        width * character_scale
+    )
+
+    safe_height = int(
+        height * character_scale
+    )
+
+    safe_width -= (
+        safe_width % 2
+    )
+
+    safe_height -= (
+        safe_height % 2
+    )
+
     safe_width = max(
-        int(width * character_scale),
-        2,
+        safe_width,
+        2
     )
 
     safe_height = max(
-        int(height * character_scale),
-        2,
+        safe_height,
+        2
     )
-
-    # Make dimensions encoder-friendly.
-    safe_width -= safe_width % 2
-    safe_height -= safe_height % 2
 
     return (
         f"[{input_label}]"
@@ -488,9 +492,9 @@ def character_fit_filter(
     )
 
 
-# =========================================================================
-# RENDER COMPLETE LAYOUT
-# =========================================================================
+# ============================================================
+# RENDER BASIC LAYOUT
+# ============================================================
 
 def render_layout_clip(
     kind,
@@ -504,37 +508,38 @@ def render_layout_clip(
     th_width,
     slide_width,
     image=None,
-    side="left",
-    character_scale=0.78,
+    side="left"
 ):
-    """
-    Render one complete layout as a video-only clip.
-    """
 
-    # =====================================================================
+    # ========================================================
     # FULL-SCREEN CHARACTER
-    # =====================================================================
+    # ========================================================
 
     if kind == "character":
 
         cmd = [
             "ffmpeg",
             "-y",
-            "-loglevel", "error",
+            "-loglevel",
+            "error",
 
-            "-ss", str(start),
-            "-t", str(duration),
+            "-ss",
+            str(start),
 
-            "-i", talking_head_path,
+            "-t",
+            str(duration),
+
+            "-i",
+            talking_head_path,
         ]
 
         filt = character_fit_filter(
-            width=width,
-            height=height,
-            fps=fps,
-            input_label="0:v",
-            output_label="out",
-            character_scale=character_scale,
+            width,
+            height,
+            fps,
+            "0:v",
+            "out",
+            character_scale=0.78
         )
 
         cmd += [
@@ -555,9 +560,6 @@ def render_layout_clip(
             "-r",
             str(fps),
 
-            "-movflags",
-            "+faststart",
-
             out_path,
         ]
 
@@ -565,21 +567,23 @@ def render_layout_clip(
 
         return out_path
 
-    # =====================================================================
+    # ========================================================
     # FULL-SCREEN SLIDE
-    # =====================================================================
+    # ========================================================
 
     if kind == "slide_full":
 
         if not image:
+
             raise ValueError(
-                "slide_full layout requires an image."
+                "slide_full requires an image."
             )
 
         cmd = [
             "ffmpeg",
             "-y",
-            "-loglevel", "error",
+            "-loglevel",
+            "error",
 
             "-loop",
             "1",
@@ -596,7 +600,7 @@ def render_layout_clip(
             height,
             fps,
             "0:v",
-            "out",
+            "out"
         )
 
         cmd += [
@@ -617,9 +621,6 @@ def render_layout_clip(
             "-r",
             str(fps),
 
-            "-movflags",
-            "+faststart",
-
             out_path,
         ]
 
@@ -627,21 +628,23 @@ def render_layout_clip(
 
         return out_path
 
-    # =====================================================================
-    # SPLIT-SCREEN SLIDE
-    # =====================================================================
+    # ========================================================
+    # NORMAL SPLIT SCREEN
+    # ========================================================
 
     if kind == "slide":
 
         if not image:
+
             raise ValueError(
-                "slide layout requires an image."
+                "slide requires an image."
             )
 
         cmd = [
             "ffmpeg",
             "-y",
-            "-loglevel", "error",
+            "-loglevel",
+            "error",
 
             # Talking head
             "-ss",
@@ -664,28 +667,28 @@ def render_layout_clip(
             image,
         ]
 
-        filter_complex = (
-            cover_filter(
-                th_width,
-                height,
-                fps,
-                "0:v",
-                "th",
-            )
-            +
-            cover_filter(
-                slide_width,
-                height,
-                fps,
-                "1:v",
-                "slide",
-            )
+        filt = ""
+
+        filt += cover_filter(
+            th_width,
+            height,
+            fps,
+            "0:v",
+            "th"
+        )
+
+        filt += cover_filter(
+            slide_width,
+            height,
+            fps,
+            "1:v",
+            "sl"
         )
 
         if side == "right":
 
-            filter_complex += (
-                "[slide][th]"
+            filt += (
+                "[sl][th]"
                 "hstack=inputs=2,"
                 "setpts=PTS-STARTPTS"
                 "[out]"
@@ -693,8 +696,8 @@ def render_layout_clip(
 
         else:
 
-            filter_complex += (
-                "[th][slide]"
+            filt += (
+                "[th][sl]"
                 "hstack=inputs=2,"
                 "setpts=PTS-STARTPTS"
                 "[out]"
@@ -702,7 +705,7 @@ def render_layout_clip(
 
         cmd += [
             "-filter_complex",
-            filter_complex,
+            filt,
 
             "-map",
             "[out]",
@@ -718,9 +721,6 @@ def render_layout_clip(
             "-r",
             str(fps),
 
-            "-movflags",
-            "+faststart",
-
             out_path,
         ]
 
@@ -729,13 +729,13 @@ def render_layout_clip(
         return out_path
 
     raise ValueError(
-        f"Unsupported layout type: {kind}"
+        f"Unsupported layout kind: {kind}"
     )
 
 
-# =========================================================================
+# ============================================================
 # RENDER TIMELINE ENTRY
-# =========================================================================
+# ============================================================
 
 def render_segment(
     entry,
@@ -746,226 +746,111 @@ def render_segment(
     height,
     fps,
     th_width,
-    slide_width,
-    character_scale,
+    slide_width
 ):
 
     out_path = os.path.join(
         work_dir,
-        f"seg_{index:05d}.mp4",
+        f"seg_{index:05d}.mp4"
     )
 
     etype = entry["type"]
 
-    # =====================================================================
+    start = float(
+        entry["start"]
+    )
+
+    duration = float(
+        entry["duration"]
+    )
+
+    # ========================================================
     # NORMAL SLIDE
-    # =====================================================================
+    # ========================================================
 
     if etype == "slide":
 
         return render_layout_clip(
-            kind="slide",
-            start=entry["start"],
-            duration=entry["duration"],
-            talking_head_path=talking_head_path,
-            out_path=out_path,
-            width=width,
-            height=height,
-            fps=fps,
-            th_width=th_width,
-            slide_width=slide_width,
+            "slide",
+            start,
+            duration,
+            talking_head_path,
+            out_path,
+            width,
+            height,
+            fps,
+            th_width,
+            slide_width,
             image=entry["image"],
-            side=entry.get("side", "left"),
-            character_scale=character_scale,
+            side=entry.get(
+                "side",
+                "left"
+            )
         )
 
-    # =====================================================================
+    # ========================================================
     # FULL-SCREEN SLIDE
-    # =====================================================================
+    # ========================================================
 
     if etype == "slide_full":
 
         return render_layout_clip(
-            kind="slide_full",
-            start=entry["start"],
-            duration=entry["duration"],
-            talking_head_path=talking_head_path,
-            out_path=out_path,
-            width=width,
-            height=height,
-            fps=fps,
-            th_width=th_width,
-            slide_width=slide_width,
-            image=entry["image"],
-            character_scale=character_scale,
+            "slide_full",
+            start,
+            duration,
+            talking_head_path,
+            out_path,
+            width,
+            height,
+            fps,
+            th_width,
+            slide_width,
+            image=entry["image"]
         )
 
-    # =====================================================================
+    # ========================================================
     # FULL-SCREEN CHARACTER
-    # =====================================================================
+    # ========================================================
 
     if etype == "character":
 
         return render_layout_clip(
-            kind="character",
-            start=entry["start"],
-            duration=entry["duration"],
-            talking_head_path=talking_head_path,
-            out_path=out_path,
-            width=width,
-            height=height,
-            fps=fps,
-            th_width=th_width,
-            slide_width=slide_width,
-            character_scale=character_scale,
-        )
-
-    # =====================================================================
-    # CROSSFADE TRANSITION
-    # =====================================================================
-
-    if etype == "transition":
-
-        from_desc = entry["from"]
-        to_desc = entry["to"]
-
-        transition_start = entry["start"]
-        transition_duration = entry["duration"]
-
-        temp_a = (
-            out_path +
-            ".from.mp4"
-        )
-
-        temp_b = (
-            out_path +
-            ".to.mp4"
-        )
-
-        # -------------------------------------------------------------
-        # FROM layout
-        # -------------------------------------------------------------
-
-        render_layout_clip(
-            kind=from_desc["type"],
-            start=transition_start,
-            duration=transition_duration,
-            talking_head_path=talking_head_path,
-            out_path=temp_a,
-            width=width,
-            height=height,
-            fps=fps,
-            th_width=th_width,
-            slide_width=slide_width,
-            image=from_desc.get("image"),
-            side=from_desc.get("side", "left"),
-            character_scale=character_scale,
-        )
-
-        # -------------------------------------------------------------
-        # TO layout
-        # -------------------------------------------------------------
-
-        render_layout_clip(
-            kind=to_desc["type"],
-            start=transition_start,
-            duration=transition_duration,
-            talking_head_path=talking_head_path,
-            out_path=temp_b,
-            width=width,
-            height=height,
-            fps=fps,
-            th_width=th_width,
-            slide_width=slide_width,
-            image=to_desc.get("image"),
-            side=to_desc.get("side", "left"),
-            character_scale=character_scale,
-        )
-
-        # -------------------------------------------------------------
-        # Crossfade
-        # -------------------------------------------------------------
-
-        fade_duration = max(
-            transition_duration - (1.0 / fps),
-            1.0 / fps,
-        )
-
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-loglevel", "error",
-
-            "-i",
-            temp_a,
-
-            "-i",
-            temp_b,
-
-            "-filter_complex",
-            (
-                f"[0:v][1:v]"
-                f"xfade="
-                f"transition=fade:"
-                f"duration={fade_duration:.3f}:"
-                f"offset=0,"
-                f"format=yuv420p"
-                f"[out]"
-            ),
-
-            "-map",
-            "[out]",
-
-            "-an",
-
-            "-c:v",
-            "libx264",
-
-            "-pix_fmt",
-            "yuv420p",
-
-            "-r",
-            str(fps),
-
-            "-movflags",
-            "+faststart",
-
+            "character",
+            start,
+            duration,
+            talking_head_path,
             out_path,
-        ]
+            width,
+            height,
+            fps,
+            th_width,
+            slide_width
+        )
 
-        run(cmd)
-
-        if os.path.exists(temp_a):
-            os.remove(temp_a)
-
-        if os.path.exists(temp_b):
-            os.remove(temp_b)
-
-        return out_path
-
-    # =====================================================================
+    # ========================================================
     # DEMO
-    # =====================================================================
+    # ========================================================
 
     if etype == "demo":
 
         offset = float(
             entry.get(
                 "offset",
-                0.0,
+                0.0
             )
         )
 
         cmd = [
             "ffmpeg",
             "-y",
-            "-loglevel", "error",
+            "-loglevel",
+            "error",
 
             "-ss",
             str(offset),
 
             "-t",
-            str(entry["duration"]),
+            str(duration),
 
             "-i",
             entry["video"],
@@ -976,7 +861,7 @@ def render_segment(
             height,
             fps,
             "0:v",
-            "out",
+            "out"
         )
 
         cmd += [
@@ -997,9 +882,6 @@ def render_segment(
             "-r",
             str(fps),
 
-            "-movflags",
-            "+faststart",
-
             out_path,
         ]
 
@@ -1007,50 +889,183 @@ def render_segment(
 
         return out_path
 
+    # ========================================================
+    # CROSSFADE
+    # ========================================================
+
+    if etype == "transition":
+
+        from_desc = entry["from"]
+
+        to_desc = entry["to"]
+
+        tmp_a = (
+            out_path
+            + ".from.mp4"
+        )
+
+        tmp_b = (
+            out_path
+            + ".to.mp4"
+        )
+
+        # ----------------------------------------------------
+        # OLD LAYOUT
+        # ----------------------------------------------------
+
+        render_layout_clip(
+            from_desc["type"],
+            start,
+            duration,
+            talking_head_path,
+            tmp_a,
+            width,
+            height,
+            fps,
+            th_width,
+            slide_width,
+            image=from_desc.get(
+                "image"
+            ),
+            side=from_desc.get(
+                "side",
+                "left"
+            )
+        )
+
+        # ----------------------------------------------------
+        # NEW LAYOUT
+        # ----------------------------------------------------
+
+        render_layout_clip(
+            to_desc["type"],
+            start,
+            duration,
+            talking_head_path,
+            tmp_b,
+            width,
+            height,
+            fps,
+            th_width,
+            slide_width,
+            image=to_desc.get(
+                "image"
+            ),
+            side=to_desc.get(
+                "side",
+                "left"
+            )
+        )
+
+        # ----------------------------------------------------
+        # CROSSFADE
+        # ----------------------------------------------------
+
+        xfade_duration = max(
+            duration - (
+                1.0 / fps
+            ),
+            1.0 / fps
+        )
+
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-loglevel",
+            "error",
+
+            "-i",
+            tmp_a,
+
+            "-i",
+            tmp_b,
+
+            "-filter_complex",
+
+            (
+                "[0:v][1:v]"
+                "xfade="
+                "transition=fade:"
+                f"duration={xfade_duration:.3f}:"
+                "offset=0,"
+                "format=yuv420p"
+                "[out]"
+            ),
+
+            "-map",
+            "[out]",
+
+            "-an",
+
+            "-c:v",
+            "libx264",
+
+            "-pix_fmt",
+            "yuv420p",
+
+            "-r",
+            str(fps),
+
+            out_path,
+        ]
+
+        run(cmd)
+
+        if os.path.exists(tmp_a):
+            os.remove(tmp_a)
+
+        if os.path.exists(tmp_b):
+            os.remove(tmp_b)
+
+        return out_path
+
     raise ValueError(
-        f"Unknown timeline entry type: {etype}"
+        f"Unknown timeline entry type: "
+        f"{etype}"
     )
 
 
-# =========================================================================
-# CONCATENATE VIDEO SEGMENTS
-# =========================================================================
+# ============================================================
+# CONCAT
+# ============================================================
 
 def concat_segments(
     segment_paths,
     output_path,
-    fps,
+    fps
 ):
 
     list_path = (
-        output_path +
-        ".concat.txt"
+        output_path
+        + ".concat.txt"
     )
 
     with open(
         list_path,
         "w",
-        encoding="utf-8",
+        encoding="utf-8"
     ) as f:
 
         for path in segment_paths:
 
-            absolute = os.path.abspath(path)
+            abs_path = os.path.abspath(
+                path
+            )
 
-            # FFmpeg concat format.
-            escaped = absolute.replace(
-                "'",
-                "'\\''"
+            safe_path = (
+                abs_path
+                .replace("'", "'\\''")
             )
 
             f.write(
-                f"file '{escaped}'\n"
+                f"file '{safe_path}'\n"
             )
 
     cmd = [
         "ffmpeg",
         "-y",
-        "-loglevel", "error",
+        "-loglevel",
+        "error",
 
         "-f",
         "concat",
@@ -1070,20 +1085,19 @@ def concat_segments(
         "-r",
         str(fps),
 
-        "-movflags",
-        "+faststart",
-
         output_path,
     ]
 
     run(cmd)
 
-    os.remove(list_path)
+    os.remove(
+        list_path
+    )
 
 
-# =========================================================================
+# ============================================================
 # AUDIO + SUBTITLES
-# =========================================================================
+# ============================================================
 
 def attach_audio_and_subtitles(
     video_only_path,
@@ -1094,13 +1108,14 @@ def attach_audio_and_subtitles(
     subtitle_margin_v=None,
     full_height=1080,
     subtitle_bar_height=0,
-    subtitle_bar_color="black",
+    subtitle_bar_color="black"
 ):
 
     cmd = [
         "ffmpeg",
         "-y",
-        "-loglevel", "error",
+        "-loglevel",
+        "error",
 
         "-i",
         video_only_path,
@@ -1111,9 +1126,9 @@ def attach_audio_and_subtitles(
 
     filters = []
 
-    # =====================================================================
-    # SUBTITLE BAR
-    # =====================================================================
+    # --------------------------------------------------------
+    # Subtitle bar
+    # --------------------------------------------------------
 
     if (
         subtitles_path
@@ -1121,73 +1136,64 @@ def attach_audio_and_subtitles(
     ):
 
         filters.append(
-            f"pad="
-            f"iw:{full_height}:"
+            f"pad=iw:{full_height}:"
             f"0:0:"
             f"color={subtitle_bar_color}"
         )
 
-    # =====================================================================
-    # SUBTITLES
-    # =====================================================================
+    # --------------------------------------------------------
+    # Subtitles
+    # --------------------------------------------------------
 
     if subtitles_path:
 
-        subtitle_file = escape_path(
+        subtitle_path = escape_path(
             subtitles_path
-        )
-
-        font_size = max(
-            int(subtitle_font_size),
-            1,
         )
 
         if subtitle_margin_v is not None:
 
-            margin_v = int(
+            margin_v = (
                 subtitle_margin_v
-            )
-
-        elif subtitle_bar_height > 0:
-
-            margin_v = max(
-                int(
-                    (
-                        subtitle_bar_height
-                        - font_size
-                    ) / 2
-                ),
-                4,
             )
 
         else:
 
-            margin_v = int(
-                full_height * 0.05
+            margin_v = max(
+                int(
+                    subtitle_bar_height
+                    / 2
+                ),
+                4
             )
 
         style = (
-            f"FontName=Roboto,"
-            f"FontSize={font_size},"
-            f"PrimaryColour=&H00FFFFFF,"
-            f"OutlineColour=&H00000000,"
-            f"BorderStyle=3,"
-            f"Outline=1,"
-            f"Shadow=0,"
-            f"BackColour=&H80404040,"
-            f"Alignment=2,"
+            "FontName=Roboto,"
+            f"FontSize={subtitle_font_size},"
+            "PrimaryColour=&H00FFFFFF,"
+            "OutlineColour=&H00000000,"
+            "BorderStyle=3,"
+            "Outline=1,"
+            "Shadow=0,"
+            "BackColour=&H80404040,"
+            "Alignment=2,"
             f"MarginV={margin_v}"
         )
 
         filters.append(
             "subtitles="
-            f"filename='{subtitle_file}':"
+            f"filename='{subtitle_path}':"
             f"force_style='{style}'"
         )
 
-    # =====================================================================
-    # VIDEO ENCODING
-    # =====================================================================
+    # --------------------------------------------------------
+    # Video
+    # --------------------------------------------------------
+
+    cmd += [
+        "-map",
+        "0:v"
+    ]
 
     if filters:
 
@@ -1199,31 +1205,21 @@ def attach_audio_and_subtitles(
             "libx264",
 
             "-pix_fmt",
-            "yuv420p",
-
-            "-r",
-            "24",
+            "yuv420p"
         ]
 
     else:
 
         cmd += [
             "-c:v",
-            "copy",
+            "copy"
         ]
 
-    # =====================================================================
-    # AUDIO
-    #
-    # IMPORTANT:
-    # Audio comes directly from the original talking-head video.
-    # Nothing is cut/reassembled.
-    # =====================================================================
+    # --------------------------------------------------------
+    # ORIGINAL AUDIO
+    # --------------------------------------------------------
 
     cmd += [
-        "-map",
-        "0:v",
-
         "-map",
         "1:a?",
 
@@ -1232,173 +1228,118 @@ def attach_audio_and_subtitles(
 
         "-shortest",
 
-        "-movflags",
-        "+faststart",
-
-        output_path,
+        output_path
     ]
 
     run(cmd)
 
 
-# =========================================================================
+# ============================================================
 # MAIN
-# =========================================================================
+# ============================================================
 
 def main():
 
     parser = argparse.ArgumentParser(
         description=(
-            "Composite talking-head video, slides, demos, "
-            "full-screen anchors and crossfade transitions."
+            "Compose talking-head video "
+            "with slides, demos and "
+            "full-screen transitions."
         )
     )
 
-    # ---------------------------------------------------------------------
-    # INPUT
-    # ---------------------------------------------------------------------
-
     parser.add_argument(
         "--talking-head",
-        required=True,
+        required=True
     )
 
     parser.add_argument(
         "--timeline",
-        default=None,
-    )
-
-    parser.add_argument(
-        "--slides-timeline",
-        default=None,
+        required=True
     )
 
     parser.add_argument(
         "--output",
-        required=True,
+        required=True
     )
-
-    # ---------------------------------------------------------------------
-    # OUTPUT
-    # ---------------------------------------------------------------------
 
     parser.add_argument(
         "--width",
         type=int,
-        default=1920,
+        default=1920
     )
 
     parser.add_argument(
         "--height",
         type=int,
-        default=1080,
+        default=1080
     )
 
     parser.add_argument(
         "--fps",
         type=int,
-        default=24,
+        default=24
     )
 
     parser.add_argument(
         "--talking-head-ratio",
         type=float,
-        default=0.28,
+        default=0.28
     )
-
-    # ---------------------------------------------------------------------
-    # CHARACTER
-    # ---------------------------------------------------------------------
-
-    parser.add_argument(
-        "--character-scale",
-        type=float,
-        default=0.78,
-        help=(
-            "Scale of full-screen character inside the canvas. "
-            "0.78 prevents excessive enlargement/cropping. "
-            "Default: 0.78."
-        ),
-    )
-
-    # ---------------------------------------------------------------------
-    # SUBTITLES
-    # ---------------------------------------------------------------------
 
     parser.add_argument(
         "--subtitles",
-        default=None,
+        default=None
     )
 
     parser.add_argument(
         "--subtitle-font-size",
         type=int,
-        default=10,
+        default=10
     )
 
     parser.add_argument(
         "--subtitle-margin",
         type=int,
-        default=None,
+        default=None
     )
 
     parser.add_argument(
         "--subtitle-bar-height",
         type=int,
-        default=None,
+        default=None
     )
 
     parser.add_argument(
         "--subtitle-bar-color",
-        default="black",
+        default="black"
     )
-
-    # ---------------------------------------------------------------------
-    # DEBUG
-    # ---------------------------------------------------------------------
 
     parser.add_argument(
         "--keep-temp",
-        action="store_true",
+        action="store_true"
     )
 
     args = parser.parse_args()
 
-    # =====================================================================
-    # CHECK TIMELINE
-    # =====================================================================
-
-    timeline_path = (
-        args.timeline
-        or args.slides_timeline
-    )
-
-    if not timeline_path:
-
-        raise SystemExit(
-            "ERROR: --timeline is required."
-        )
-
-    # =====================================================================
-    # CHECK FILES
-    # =====================================================================
+    # --------------------------------------------------------
+    # Validate
+    # --------------------------------------------------------
 
     if not os.path.exists(
         args.talking_head
     ):
 
-        raise SystemExit(
-            f"ERROR: talking-head not found: "
-            f"{args.talking_head}"
+        raise FileNotFoundError(
+            args.talking_head
         )
 
     if not os.path.exists(
-        timeline_path
+        args.timeline
     ):
 
-        raise SystemExit(
-            f"ERROR: timeline not found: "
-            f"{timeline_path}"
+        raise FileNotFoundError(
+            args.timeline
         )
 
     if (
@@ -1408,44 +1349,13 @@ def main():
         )
     ):
 
-        raise SystemExit(
-            f"ERROR: subtitles not found: "
-            f"{args.subtitles}"
+        raise FileNotFoundError(
+            args.subtitles
         )
 
-    # =====================================================================
-    # VALIDATE CHARACTER SCALE
-    # =====================================================================
-
-    if not (
-        0.1
-        <= args.character_scale
-        <= 1.0
-    ):
-
-        raise SystemExit(
-            "ERROR: --character-scale must be "
-            "between 0.1 and 1.0."
-        )
-
-    # =====================================================================
-    # OUTPUT DIRECTORY
-    # =====================================================================
-
-    output_parent = os.path.dirname(
-        os.path.abspath(
-            args.output
-        )
-    )
-
-    os.makedirs(
-        output_parent,
-        exist_ok=True,
-    )
-
-    # =====================================================================
-    # VIDEO DURATION
-    # =====================================================================
+    # --------------------------------------------------------
+    # Duration
+    # --------------------------------------------------------
 
     print(
         "Reading talking-head video duration..."
@@ -1460,99 +1370,132 @@ def main():
         f"{total_duration:.3f}s"
     )
 
-    # =====================================================================
-    # LOAD TIMELINE
-    # =====================================================================
-
-    print(
-        f"Loading timeline JSON: "
-        f"{timeline_path}"
-    )
+    # --------------------------------------------------------
+    # Timeline
+    # --------------------------------------------------------
 
     timeline = load_composite_timeline(
-        timeline_path,
-        total_duration,
+        args.timeline,
+        total_duration
     )
 
-    # =====================================================================
-    # PRINT TIMELINE SUMMARY
-    # =====================================================================
+    # --------------------------------------------------------
+    # Print timeline
+    # --------------------------------------------------------
 
     print()
 
-    counts = {}
-
-    for e in timeline:
+    for i, e in enumerate(
+        timeline
+    ):
 
         etype = e["type"]
 
-        counts[etype] = (
-            counts.get(etype, 0)
-            + 1
+        start = e["start"]
+
+        end = (
+            start
+            + e["duration"]
         )
 
-    print(
-        "Timeline summary:"
-    )
+        if etype == "slide":
 
-    for key in sorted(counts):
+            description = (
+                f"{e['image']} "
+                f"(side={e.get('side', 'left')})"
+            )
 
-        print(
-            f"  {key:15s}: "
-            f"{counts[key]}"
-        )
+        elif etype == "slide_full":
 
-    print()
+            description = (
+                f"{e['image']} "
+                "(FULL SCREEN SLIDE)"
+            )
 
-    # =====================================================================
-    # SUBTITLE BAR
-    # =====================================================================
+        elif etype == "character":
 
-    subtitle_bar_height = 0
+            description = (
+                "FULL SCREEN CHARACTER"
+            )
 
-    content_height = args.height
+        elif etype == "demo":
 
-    if args.subtitles:
+            description = (
+                f"{e['video']} "
+                "(DEMO)"
+            )
 
-        if (
-            args.subtitle_bar_height
-            is not None
-        ):
+        elif etype == "transition":
 
-            subtitle_bar_height = (
-                args.subtitle_bar_height
+            description = (
+                f"{e['from']['type']} "
+                "-> "
+                f"{e['to']['type']} "
+                "(CROSSFADE)"
             )
 
         else:
 
-            subtitle_bar_height = max(
-                int(args.height * 0.09),
-                60,
+            description = ""
+
+        print(
+            f"{i + 1:3d}. "
+            f"[{etype.upper():10s}] "
+            f"{start:8.2f}s -> "
+            f"{end:8.2f}s "
+            f"({e['duration']:6.2f}s) "
+            f"{description}"
+        )
+
+    # --------------------------------------------------------
+    # Subtitle area
+    # --------------------------------------------------------
+
+    subtitle_bar_height = 0
+
+    content_height = (
+        args.height
+    )
+
+    if args.subtitles:
+
+        subtitle_bar_height = (
+            args.subtitle_bar_height
+            if args.subtitle_bar_height
+            is not None
+            else max(
+                int(
+                    args.height * 0.09
+                ),
+                60
             )
+        )
 
         content_height = (
             args.height
             - subtitle_bar_height
         )
 
-    # =====================================================================
-    # EVEN DIMENSIONS
-    # =====================================================================
+    # --------------------------------------------------------
+    # Even dimensions
+    # --------------------------------------------------------
 
-    if args.width % 2:
+    width = (
+        args.width
+        - args.width % 2
+    )
 
-        args.width -= 1
+    content_height = (
+        content_height
+        - content_height % 2
+    )
 
-    if content_height % 2:
-
-        content_height -= 1
-
-    # =====================================================================
-    # TALKING HEAD / SLIDE WIDTHS
-    # =====================================================================
+    # --------------------------------------------------------
+    # Talking-head width
+    # --------------------------------------------------------
 
     th_width = int(
-        args.width
+        width
         * args.talking_head_ratio
     )
 
@@ -1561,163 +1504,95 @@ def main():
     )
 
     slide_width = (
-        args.width
+        width
         - th_width
     )
 
-    if slide_width % 2:
-
-        slide_width -= 1
-
-        th_width = (
-            args.width
-            - slide_width
-        )
-
-    print()
-    print(
-        f"Canvas: "
-        f"{args.width}x{args.height}"
-    )
-
-    print(
-        f"Content height: "
-        f"{content_height}"
-    )
-
-    print(
-        f"Talking-head width: "
-        f"{th_width}"
-    )
-
-    print(
-        f"Slide width: "
-        f"{slide_width}"
-    )
-
-    print(
-        f"Full-screen character scale: "
-        f"{args.character_scale:.2f}"
-    )
-
-    # =====================================================================
-    # TEMP DIRECTORY
-    # =====================================================================
+    # --------------------------------------------------------
+    # Temporary directory
+    # --------------------------------------------------------
 
     work_dir = (
         args.output
         + ".segments"
     )
 
-    if os.path.exists(work_dir):
-
-        print(
-            f"\nRemoving previous temporary "
-            f"directory: {work_dir}"
-        )
-
-        shutil.rmtree(
-            work_dir,
-            ignore_errors=True,
-        )
-
     os.makedirs(
         work_dir,
-        exist_ok=True,
+        exist_ok=True
     )
 
-    # =====================================================================
-    # RENDER SEGMENTS
-    # =====================================================================
+    # --------------------------------------------------------
+    # Render
+    # --------------------------------------------------------
 
     print()
+
     print(
         f"Rendering {len(timeline)} "
-        f"timeline segments..."
+        f"timeline entries..."
     )
 
     segment_paths = []
 
-    for index, entry in enumerate(
+    for i, entry in enumerate(
         timeline
     ):
 
         print(
-            f"\n[{index + 1}/"
-            f"{len(timeline)}] "
-            f"{entry['type']} "
-            f"start={entry['start']:.3f}s "
-            f"duration={entry['duration']:.3f}s"
+            f"  Rendering "
+            f"{i + 1}/{len(timeline)} "
+            f"({entry['type']})..."
         )
 
-        if entry["type"] == "slide":
-
-            print(
-                f"  side: "
-                f"{entry.get('side', 'left')}"
-            )
-
-        elif entry["type"] == "transition":
-
-            print(
-                f"  transition: "
-                f"{entry['from']['type']} "
-                f"-> "
-                f"{entry['to']['type']}"
-            )
-
-        segment_path = render_segment(
-            entry=entry,
-            index=index,
-            talking_head_path=args.talking_head,
-            work_dir=work_dir,
-            width=args.width,
-            height=content_height,
-            fps=args.fps,
-            th_width=th_width,
-            slide_width=slide_width,
-            character_scale=args.character_scale,
+        path = render_segment(
+            entry,
+            i,
+            args.talking_head,
+            work_dir,
+            width,
+            content_height,
+            args.fps,
+            th_width,
+            slide_width
         )
 
         segment_paths.append(
-            segment_path
+            path
         )
 
-    # =====================================================================
-    # CONCATENATE
-    # =====================================================================
+    # --------------------------------------------------------
+    # Concatenate
+    # --------------------------------------------------------
 
-    concatenated_path = os.path.join(
+    concatenated = os.path.join(
         work_dir,
-        "_concatenated.mp4",
+        "_concatenated.mp4"
     )
 
     print()
     print(
-        "Concatenating video segments..."
+        "Concatenating segments..."
     )
 
     concat_segments(
         segment_paths,
-        concatenated_path,
-        args.fps,
+        concatenated,
+        args.fps
     )
 
-    # =====================================================================
-    # ATTACH AUDIO + SUBTITLES
-    # =====================================================================
+    # --------------------------------------------------------
+    # Attach audio
+    # --------------------------------------------------------
 
-    print()
     print(
-        "Attaching original continuous audio..."
+        "Attaching original audio..."
     )
 
     attach_audio_and_subtitles(
-        video_only_path=concatenated_path,
-
-        talking_head_path=args.talking_head,
-
-        output_path=args.output,
+        concatenated,
+        args.talking_head,
+        args.output,
 
         subtitles_path=args.subtitles,
 
@@ -1737,45 +1612,37 @@ def main():
 
         subtitle_bar_color=(
             args.subtitle_bar_color
-        ),
+        )
     )
 
-    # =====================================================================
-    # CLEANUP
-    # =====================================================================
+    # --------------------------------------------------------
+    # Cleanup
+    # --------------------------------------------------------
 
     if not args.keep_temp:
 
-        print(
-            "\nRemoving temporary files..."
-        )
-
         shutil.rmtree(
             work_dir,
-            ignore_errors=True,
+            ignore_errors=True
         )
 
-    # =====================================================================
-    # COMPLETE
-    # =====================================================================
-
     print()
-    print("=" * 60)
-    print("COMPOSITE COMPLETE")
-    print("=" * 60)
+    print(
+        "=" * 60
+    )
+
+    print(
+        "COMPOSITION COMPLETE"
+    )
+
     print(
         f"Output: {args.output}"
     )
+
     print(
-        f"Character scale: "
-        f"{args.character_scale:.2f}"
+        "=" * 60
     )
-    print("=" * 60)
 
-
-# =========================================================================
-# ENTRY POINT
-# =========================================================================
 
 if __name__ == "__main__":
     main()

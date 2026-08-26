@@ -13,7 +13,8 @@ python run_pipeline.py \
   --detect-demo-segments \
   --vary-layout \
   --side-flip-threshold 210 \
-  --character-anchor-duration 3.5 \
+  --transition-anchor alternating \
+  --character-anchor-duration 5 \
   --slide-anchor-duration 10 \
   --crossfade-duration 1.5 \
   --talking-head-ratio 0.3 \
