@@ -17,9 +17,9 @@ Behavior
       4th -> full-screen slide
       ...
 
-- Full-screen character duration: 5 seconds by default.
+- Full-screen character duration: 10 seconds by default.
 - Full-screen slide duration: 10 seconds by default.
-- Crossfade duration: 1.5 seconds by default.
+- Crossfade duration: 2.0 seconds by default.
 - Each side change has:
 
       split-screen
@@ -58,8 +58,6 @@ import json
 
 # ============================================================
 # SIDE
-# ============================================================
-
 def flip_side(side):
     if side == "left":
         return "right"
@@ -104,16 +102,14 @@ def build_anchor(anchor_type, image):
     }
 
 
-# ============================================================
 # MAIN TIMELINE PROCESSING
-# ============================================================
 
 def vary_timeline(
     timeline,
     side_flip_threshold=210.0,
-    character_anchor_duration=5.0,
+    character_anchor_duration=10.0,
     slide_anchor_duration=10.0,
-    crossfade_duration=1.5,
+    crossfade_duration=2.0,
     transition_anchor="alternating",
 ):
     """
@@ -141,66 +137,72 @@ def vary_timeline(
         )
 
     varied = []
-
     current_side = "left"
-
-    # Cumulative time spent showing slides while the
-    # character is on the current side.
     time_since_flip = 0.0
-
     side_swap_count = 0
-
     EPS = 0.01
 
-    # --------------------------------------------------------
-    # Process original timeline
-    # --------------------------------------------------------
+    def get_slide_image_at(t):
+        for e in timeline:
+            if e.get("type") == "slide":
+                start = float(e["start"])
+                dur = float(e["duration"])
+                if start <= t < start + dur + EPS:
+                    return e["image"]
+        for e in timeline:
+            if e.get("type") == "slide":
+                return e["image"]
+        return None
 
-    for original in timeline:
+    def get_continuous_slide_ahead(start_time):
+        avail = 0.0
+        for e in timeline:
+            e_start = float(e["start"])
+            e_end = e_start + float(e["duration"])
+            if e_end <= start_time + EPS:
+                continue
+            if e.get("type") != "slide":
+                break
+            seg_start = max(e_start, start_time)
+            avail += (e_end - seg_start)
+        return avail
 
-        entry = dict(original)
+    t = 0.0
 
-        # ----------------------------------------------------
-        # Demos and other non-slide entries are copied exactly.
-        # ----------------------------------------------------
+    for entry in timeline:
+        etype = entry.get("type", "slide")
+        start = float(entry["start"])
+        duration = float(entry["duration"])
+        end = start + duration
 
-        if entry.get("type") != "slide":
+        if start < t - EPS:
+            if end <= t + EPS:
+                continue
+            duration = end - t
+            start = t
 
-            varied.append(entry)
-
+        if etype != "slide":
+            varied.append({
+                **entry,
+                "start": start,
+                "duration": duration,
+            })
+            t = end
             continue
 
         image = entry["image"]
-
-        cursor = float(entry["start"])
-        remaining = float(entry["duration"])
-
-        # ----------------------------------------------------
-        # A single slide can contain:
-        #
-        # normal slide
-        # transition
-        # full-screen anchor
-        # transition
-        # new-side slide
-        #
-        # if the threshold occurs inside the slide.
-        # ----------------------------------------------------
+        cursor = start
+        remaining = duration
 
         while remaining > EPS:
-
             until_flip = (
                 side_flip_threshold
                 - time_since_flip
             )
 
-            # =================================================
             # NORMAL SLIDE
-            # =================================================
-
             if until_flip > EPS:
-
-                normal_duration = min(
+                chunk_dur = min(
                     remaining,
                     until_flip
                 )
@@ -209,22 +211,18 @@ def vary_timeline(
                     "type": "slide",
                     "image": image,
                     "start": cursor,
-                    "duration": normal_duration,
+                    "duration": chunk_dur,
                     "side": current_side,
                 })
 
-                cursor += normal_duration
-                remaining -= normal_duration
-                time_since_flip += normal_duration
-
+                cursor += chunk_dur
+                remaining -= chunk_dur
+                time_since_flip += chunk_dur
+                t = cursor
                 continue
 
-            # =================================================
             # SIDE CHANGE
-            # =================================================
-
             side_swap_count += 1
-
             new_side = flip_side(
                 current_side
             )
@@ -253,113 +251,80 @@ def vary_timeline(
                 + anchor_duration
             )
 
-            # =================================================
-            # We need enough time in the current slide to fit:
-            #
-            # crossfade
-            # anchor
-            # crossfade
-            #
-            # If there is enough room, use the requested
-            # durations.
-            #
-            # If not, scale them proportionally.
-            # =================================================
+            avail_ahead = get_continuous_slide_ahead(cursor)
+            if avail_ahead < desired_total:
+                if avail_ahead >= 7.0:
+                    scale = avail_ahead / desired_total
+                    local_crossfade = max(crossfade_duration * scale, 1.0)
+                    local_anchor = avail_ahead - (2.0 * local_crossfade)
+                else:
+                    # Defer side change until after demo clip or continue on current side
+                    chunk_dur = remaining
+                    varied.append({
+                        "type": "slide",
+                        "image": image,
+                        "start": cursor,
+                        "duration": chunk_dur,
+                        "side": current_side,
+                    })
+                    cursor += chunk_dur
+                    remaining = 0.0
+                    t = cursor
+                    side_swap_count -= 1
+                    continue
+            else:
+                local_anchor = anchor_duration
+                local_crossfade = crossfade_duration
 
-            available = remaining
-
-            local_anchor = anchor_duration
-            local_crossfade = crossfade_duration
-
-            if available < desired_total:
-
-                scale = (
-                    available
-                    / desired_total
-                )
-
-                local_anchor *= scale
-                local_crossfade *= scale
-
-            # =================================================
             # CROSSFADE INTO FULL-SCREEN ANCHOR
-            # =================================================
-
             varied.append({
                 "type": "transition",
-
                 "start": cursor,
-
                 "duration": local_crossfade,
-
                 "from": {
                     "type": "slide",
                     "image": image,
                     "side": current_side,
                 },
-
                 "to": anchor,
             })
 
             cursor += local_crossfade
-            remaining -= local_crossfade
 
-            # =================================================
             # FULL-SCREEN CHARACTER OR SLIDE
-            # =================================================
-
             varied.append({
                 **anchor,
-
                 "start": cursor,
-
                 "duration": local_anchor,
             })
 
             cursor += local_anchor
-            remaining -= local_anchor
 
-            # =================================================
             # CROSSFADE INTO NEW SIDE
-            # =================================================
-
+            return_image = get_slide_image_at(cursor + local_crossfade) or image
             varied.append({
                 "type": "transition",
-
                 "start": cursor,
-
                 "duration": local_crossfade,
-
                 "from": anchor,
-
                 "to": {
                     "type": "slide",
-                    "image": image,
+                    "image": return_image,
                     "side": new_side,
                 },
             })
 
             cursor += local_crossfade
-            remaining -= local_crossfade
 
-            # =================================================
             # SIDE HAS NOW CHANGED
-            # =================================================
-
             current_side = new_side
-
             time_since_flip = 0.0
-
-            if remaining < EPS:
-                remaining = 0.0
+            t = cursor
+            remaining = 0.0
 
     return varied
 
-
-# ============================================================
 # COMMAND LINE
-# ============================================================
-
 def main():
 
     parser = argparse.ArgumentParser(
@@ -408,10 +373,10 @@ def main():
     parser.add_argument(
         "--character-anchor-duration",
         type=float,
-        default=5.0,
+        default=10.0,
         help=(
             "Full-screen character duration. "
-            "Default: 5 seconds."
+            "Default: 10 seconds."
         )
     )
 
@@ -428,10 +393,10 @@ def main():
     parser.add_argument(
         "--crossfade-duration",
         type=float,
-        default=1.5,
+        default=2.0,
         help=(
             "Crossfade duration. "
-            "Default: 1.5 seconds."
+            "Default: 2.0 seconds."
         )
     )
 
@@ -581,22 +546,22 @@ def main():
 
         print(
             "  1st side change -> "
-            "FULL-SCREEN CHARACTER (5s)"
+            f"FULL-SCREEN CHARACTER ({args.character_anchor_duration:.0f}s)"
         )
 
         print(
             "  2nd side change -> "
-            "FULL-SCREEN SLIDE (10s)"
+            f"FULL-SCREEN SLIDE ({args.slide_anchor_duration:.0f}s)"
         )
 
         print(
             "  3rd side change -> "
-            "FULL-SCREEN CHARACTER (5s)"
+            f"FULL-SCREEN CHARACTER ({args.character_anchor_duration:.0f}s)"
         )
 
         print(
             "  4th side change -> "
-            "FULL-SCREEN SLIDE (10s)"
+            f"FULL-SCREEN SLIDE ({args.slide_anchor_duration:.0f}s)"
         )
 
     print()

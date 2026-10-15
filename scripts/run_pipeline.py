@@ -22,22 +22,23 @@ Every step after Phase 0 runs on the CLEANED audio/video, not the originals
 Layout variation:
 
     1st side change
-        -> character full-screen 5s
+        -> character full-screen 10s
 
     2nd side change
         -> slide full-screen 10s
 
     3rd side change
-        -> character full-screen 5s
+        -> character full-screen 10s
 
     4th side change
         -> slide full-screen 10s
 
-All side changes use 1.5s crossfades.
+All side changes use 2.0s crossfades.
 """
 
 import os
 import sys
+import time
 import argparse
 import subprocess
 
@@ -45,6 +46,26 @@ import subprocess
 SCRIPT_DIR = os.path.dirname(
     os.path.abspath(__file__)
 )
+
+
+# ============================================================
+# TIMING HELPERS
+# ============================================================
+
+# Collects (description, seconds) for every step that ran,
+# so a full summary can be printed at the end of the pipeline.
+STEP_TIMES = []
+
+
+def format_duration(seconds):
+
+    minutes = int(seconds // 60)
+    remaining_secs = seconds - (minutes * 60)
+
+    if minutes > 0:
+        return f"{minutes}m {remaining_secs:.1f}s"
+
+    return f"{remaining_secs:.1f}s"
 
 
 # ============================================================
@@ -70,8 +91,23 @@ def run_step(
         )
     )
 
+    step_start = time.monotonic()
+
     result = subprocess.run(
         cmd
+    )
+
+    step_elapsed = (
+        time.monotonic() - step_start
+    )
+
+    STEP_TIMES.append(
+        (description, step_elapsed)
+    )
+
+    print(
+        f"[TIME] {description} took "
+        f"{format_duration(step_elapsed)}"
     )
 
     if result.returncode != 0:
@@ -82,9 +118,39 @@ def run_step(
             f"{description}"
         )
 
+        print_timing_summary()
+
         sys.exit(
             result.returncode
         )
+
+
+def print_timing_summary():
+
+    if not STEP_TIMES:
+        return
+
+    print()
+    print("=" * 60)
+    print("STEP TIMING SUMMARY")
+    print("=" * 60)
+
+    total = 0.0
+
+    for description, elapsed in STEP_TIMES:
+
+        print(
+            f"  {format_duration(elapsed):>10}  "
+            f"{description}"
+        )
+
+        total += elapsed
+
+    print("-" * 60)
+    print(
+        f"  {format_duration(total):>10}  TOTAL"
+    )
+    print("=" * 60)
 
 
 # ============================================================
@@ -300,7 +366,7 @@ def main():
     parser.add_argument(
         "--character-anchor-duration",
         type=float,
-        default=5.0,
+        default=10.0,
         help=(
             "Full-screen character duration."
         )
@@ -318,7 +384,7 @@ def main():
     parser.add_argument(
         "--crossfade-duration",
         type=float,
-        default=1.5,
+        default=2.0,
         help=(
             "Crossfade duration."
         )
@@ -405,6 +471,13 @@ def main():
         "--subtitle-bar-height",
         type=int,
         default=None
+    )
+
+    parser.add_argument(
+        "--subtitle-time-offset",
+        type=float,
+        default=0.0,
+        help="Offset in seconds to nudge subtitles earlier (negative) or later (positive)."
     )
 
     args = parser.parse_args()
@@ -672,25 +745,33 @@ def main():
 
     if args.subtitles:
 
+        transcript_cmd = [
+            sys.executable,
+
+            os.path.join(
+                SCRIPT_DIR,
+                "generate_transcript.py"
+            ),
+
+            "--audio",
+            narration_for_pipeline,
+
+            "--output",
+            transcript_srt,
+
+            "--model",
+            args.whisper_model
+        ]
+
+        if args.subtitle_time_offset != 0.0:
+            transcript_cmd += [
+                "--time-offset",
+                str(args.subtitle_time_offset)
+            ]
+
         run_step(
             "Generate transcript",
-            [
-                sys.executable,
-
-                os.path.join(
-                    SCRIPT_DIR,
-                    "generate_transcript.py"
-                ),
-
-                "--audio",
-                narration_for_pipeline,
-
-                "--output",
-                transcript_srt,
-
-                "--model",
-                args.whisper_model
-            ]
+            transcript_cmd
         )
 
     # ========================================================
@@ -995,6 +1076,12 @@ def main():
         )
     ]
 
+    if narration_for_pipeline and os.path.exists(narration_for_pipeline):
+        compose_cmd += [
+            "--audio",
+            narration_for_pipeline
+        ]
+
     if args.subtitles:
 
         compose_cmd += [
@@ -1055,6 +1142,8 @@ def main():
     )
 
     print("=" * 60)
+
+    print_timing_summary()
 
 
 if __name__ == "__main__":

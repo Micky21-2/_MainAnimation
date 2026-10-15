@@ -47,9 +47,7 @@ import argparse
 import subprocess
 
 
-# ============================================================
 # COMMAND RUNNER
-# ============================================================
 
 def run(cmd):
 
@@ -63,9 +61,7 @@ def run(cmd):
     )
 
 
-# ============================================================
 # VIDEO DURATION
-# ============================================================
 
 def get_video_duration(path):
 
@@ -93,9 +89,7 @@ def get_video_duration(path):
     )
 
 
-# ============================================================
 # TIMELINE LOADER
-# ============================================================
 
 def load_composite_timeline(
     path,
@@ -131,14 +125,7 @@ def load_composite_timeline(
 
         e = dict(entry)
 
-        # ----------------------------------------------------
-        # Only the standard format is accepted.
-        # ----------------------------------------------------
-
         if "start" not in e:
-
-            # Give a useful error instead of the old
-            # KeyError: 'start'.
 
             raise ValueError(
                 f"Timeline entry {i} has no "
@@ -173,10 +160,6 @@ def load_composite_timeline(
                 f"Timeline entry {i} has "
                 f"non-positive duration: {e}"
             )
-
-        # ----------------------------------------------------
-        # Check timeline entry types.
-        # ----------------------------------------------------
 
         etype = e["type"]
 
@@ -239,7 +222,6 @@ def load_composite_timeline(
         elif etype == "transition":
 
             from_desc = e.get("from")
-
             to_desc = e.get("to")
 
             if not isinstance(
@@ -281,10 +263,6 @@ def load_composite_timeline(
                 f"'{etype}' at entry {i}"
             )
 
-        # ----------------------------------------------------
-        # Duration bounds
-        # ----------------------------------------------------
-
         if e["start"] < -0.001:
 
             raise ValueError(
@@ -307,10 +285,6 @@ def load_composite_timeline(
 
         normalized.append(e)
 
-    # --------------------------------------------------------
-    # Sort
-    # --------------------------------------------------------
-
     normalized.sort(
         key=lambda e: e["start"]
     )
@@ -323,9 +297,7 @@ def load_composite_timeline(
     return normalized
 
 
-# ============================================================
 # TRANSITION VALIDATION
-# ============================================================
 
 def validate_transition_endpoint(
     desc,
@@ -393,9 +365,7 @@ def validate_transition_endpoint(
         )
 
 
-# ============================================================
 # PATH ESCAPING
-# ============================================================
 
 def escape_path(path):
 
@@ -409,9 +379,7 @@ def escape_path(path):
     )
 
 
-# ============================================================
 # COVER FILTER
-# ============================================================
 
 def cover_filter(
     width,
@@ -433,9 +401,34 @@ def cover_filter(
     )
 
 
-# ============================================================
+# FIT FILTER
+#
+# Fits the complete image inside the requested area
+# without cropping it.
+
+def fit_filter(
+    width,
+    height,
+    fps,
+    input_label,
+    output_label
+):
+
+    return (
+        f"[{input_label}]"
+        f"scale={width}:{height}:"
+        f"force_original_aspect_ratio=decrease,"
+        f"pad={width}:{height}:"
+        f"(ow-iw)/2:"
+        f"(oh-ih)/2,"
+        f"setsar=1,"
+        f"setpts=PTS-STARTPTS,"
+        f"fps={fps}"
+        f"[{output_label}];"
+    )
+
+
 # CHARACTER FIT
-# ============================================================
 
 def character_fit_filter(
     width,
@@ -492,9 +485,7 @@ def character_fit_filter(
     )
 
 
-# ============================================================
 # RENDER BASIC LAYOUT
-# ============================================================
 
 def render_layout_clip(
     kind,
@@ -511,9 +502,7 @@ def render_layout_clip(
     side="left"
 ):
 
-    # ========================================================
     # FULL-SCREEN CHARACTER
-    # ========================================================
 
     if kind == "character":
 
@@ -567,9 +556,7 @@ def render_layout_clip(
 
         return out_path
 
-    # ========================================================
     # FULL-SCREEN SLIDE
-    # ========================================================
 
     if kind == "slide_full":
 
@@ -628,9 +615,7 @@ def render_layout_clip(
 
         return out_path
 
-    # ========================================================
     # NORMAL SPLIT SCREEN
-    # ========================================================
 
     if kind == "slide":
 
@@ -677,7 +662,7 @@ def render_layout_clip(
             "th"
         )
 
-        filt += cover_filter(
+        filt += fit_filter(
             slide_width,
             height,
             fps,
@@ -733,9 +718,7 @@ def render_layout_clip(
     )
 
 
-# ============================================================
 # RENDER TIMELINE ENTRY
-# ============================================================
 
 def render_segment(
     entry,
@@ -764,9 +747,7 @@ def render_segment(
         entry["duration"]
     )
 
-    # ========================================================
     # NORMAL SLIDE
-    # ========================================================
 
     if etype == "slide":
 
@@ -788,9 +769,7 @@ def render_segment(
             )
         )
 
-    # ========================================================
     # FULL-SCREEN SLIDE
-    # ========================================================
 
     if etype == "slide_full":
 
@@ -808,9 +787,7 @@ def render_segment(
             image=entry["image"]
         )
 
-    # ========================================================
     # FULL-SCREEN CHARACTER
-    # ========================================================
 
     if etype == "character":
 
@@ -827,9 +804,7 @@ def render_segment(
             slide_width
         )
 
-    # ========================================================
     # DEMO
-    # ========================================================
 
     if etype == "demo":
 
@@ -889,9 +864,7 @@ def render_segment(
 
         return out_path
 
-    # ========================================================
     # CROSSFADE
-    # ========================================================
 
     if etype == "transition":
 
@@ -909,9 +882,7 @@ def render_segment(
             + ".to.mp4"
         )
 
-        # ----------------------------------------------------
         # OLD LAYOUT
-        # ----------------------------------------------------
 
         render_layout_clip(
             from_desc["type"],
@@ -933,9 +904,7 @@ def render_segment(
             )
         )
 
-        # ----------------------------------------------------
         # NEW LAYOUT
-        # ----------------------------------------------------
 
         render_layout_clip(
             to_desc["type"],
@@ -957,9 +926,7 @@ def render_segment(
             )
         )
 
-        # ----------------------------------------------------
         # CROSSFADE
-        # ----------------------------------------------------
 
         xfade_duration = max(
             duration - (
@@ -1025,9 +992,7 @@ def render_segment(
     )
 
 
-# ============================================================
 # CONCAT
-# ============================================================
 
 def concat_segments(
     segment_paths,
@@ -1095,14 +1060,13 @@ def concat_segments(
     )
 
 
-# ============================================================
 # AUDIO + SUBTITLES
-# ============================================================
 
 def attach_audio_and_subtitles(
     video_only_path,
     talking_head_path,
     output_path,
+    audio_path=None,
     subtitles_path=None,
     subtitle_font_size=10,
     subtitle_margin_v=None,
@@ -1110,6 +1074,12 @@ def attach_audio_and_subtitles(
     subtitle_bar_height=0,
     subtitle_bar_color="black"
 ):
+
+    narration_source = (
+        audio_path
+        if (audio_path and os.path.exists(audio_path))
+        else talking_head_path
+    )
 
     cmd = [
         "ffmpeg",
@@ -1121,14 +1091,12 @@ def attach_audio_and_subtitles(
         video_only_path,
 
         "-i",
-        talking_head_path,
+        narration_source,
     ]
 
     filters = []
 
-    # --------------------------------------------------------
     # Subtitle bar
-    # --------------------------------------------------------
 
     if (
         subtitles_path
@@ -1141,9 +1109,7 @@ def attach_audio_and_subtitles(
             f"color={subtitle_bar_color}"
         )
 
-    # --------------------------------------------------------
     # Subtitles
-    # --------------------------------------------------------
 
     if subtitles_path:
 
@@ -1159,13 +1125,14 @@ def attach_audio_and_subtitles(
 
         else:
 
+            # Lower the position of the subtitle down within the bar (or frame)
             margin_v = max(
                 int(
                     subtitle_bar_height
-                    / 2
+                    * 0.22
                 ),
-                4
-            )
+                12
+            ) if subtitle_bar_height > 0 else 18
 
         style = (
             "FontName=Roboto,"
@@ -1186,9 +1153,7 @@ def attach_audio_and_subtitles(
             f"force_style='{style}'"
         )
 
-    # --------------------------------------------------------
     # Video
-    # --------------------------------------------------------
 
     cmd += [
         "-map",
@@ -1215,9 +1180,7 @@ def attach_audio_and_subtitles(
             "copy"
         ]
 
-    # --------------------------------------------------------
     # ORIGINAL AUDIO
-    # --------------------------------------------------------
 
     cmd += [
         "-map",
@@ -1234,9 +1197,7 @@ def attach_audio_and_subtitles(
     run(cmd)
 
 
-# ============================================================
 # MAIN
-# ============================================================
 
 def main():
 
@@ -1251,6 +1212,12 @@ def main():
     parser.add_argument(
         "--talking-head",
         required=True
+    )
+
+    parser.add_argument(
+        "--audio",
+        default=None,
+        help="Path to narration audio file (preferred over extracting audio from --talking-head to avoid sync drift)"
     )
 
     parser.add_argument(
@@ -1322,9 +1289,7 @@ def main():
 
     args = parser.parse_args()
 
-    # --------------------------------------------------------
     # Validate
-    # --------------------------------------------------------
 
     if not os.path.exists(
         args.talking_head
@@ -1353,9 +1318,7 @@ def main():
             args.subtitles
         )
 
-    # --------------------------------------------------------
     # Duration
-    # --------------------------------------------------------
 
     print(
         "Reading talking-head video duration..."
@@ -1370,18 +1333,14 @@ def main():
         f"{total_duration:.3f}s"
     )
 
-    # --------------------------------------------------------
     # Timeline
-    # --------------------------------------------------------
 
     timeline = load_composite_timeline(
         args.timeline,
         total_duration
     )
 
-    # --------------------------------------------------------
     # Print timeline
-    # --------------------------------------------------------
 
     print()
 
@@ -1447,9 +1406,7 @@ def main():
             f"{description}"
         )
 
-    # --------------------------------------------------------
     # Subtitle area
-    # --------------------------------------------------------
 
     subtitle_bar_height = 0
 
@@ -1476,9 +1433,7 @@ def main():
             - subtitle_bar_height
         )
 
-    # --------------------------------------------------------
     # Even dimensions
-    # --------------------------------------------------------
 
     width = (
         args.width
@@ -1490,9 +1445,7 @@ def main():
         - content_height % 2
     )
 
-    # --------------------------------------------------------
     # Talking-head width
-    # --------------------------------------------------------
 
     th_width = int(
         width
@@ -1508,9 +1461,7 @@ def main():
         - th_width
     )
 
-    # --------------------------------------------------------
     # Temporary directory
-    # --------------------------------------------------------
 
     work_dir = (
         args.output
@@ -1522,9 +1473,7 @@ def main():
         exist_ok=True
     )
 
-    # --------------------------------------------------------
     # Render
-    # --------------------------------------------------------
 
     print()
 
@@ -1561,9 +1510,7 @@ def main():
             path
         )
 
-    # --------------------------------------------------------
     # Concatenate
-    # --------------------------------------------------------
 
     concatenated = os.path.join(
         work_dir,
@@ -1581,9 +1528,7 @@ def main():
         args.fps
     )
 
-    # --------------------------------------------------------
     # Attach audio
-    # --------------------------------------------------------
 
     print(
         "Attaching original audio..."
@@ -1593,6 +1538,8 @@ def main():
         concatenated,
         args.talking_head,
         args.output,
+
+        audio_path=args.audio,
 
         subtitles_path=args.subtitles,
 
@@ -1615,9 +1562,7 @@ def main():
         )
     )
 
-    # --------------------------------------------------------
     # Cleanup
-    # --------------------------------------------------------
 
     if not args.keep_temp:
 
@@ -1628,19 +1573,11 @@ def main():
 
     print()
     print(
-        "=" * 60
-    )
-
-    print(
         "COMPOSITION COMPLETE"
     )
 
     print(
         f"Output: {args.output}"
-    )
-
-    print(
-        "=" * 60
     )
 
 

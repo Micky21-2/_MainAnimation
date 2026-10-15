@@ -36,6 +36,7 @@ import re
 import json
 import argparse
 import subprocess
+import tempfile
 
 
 # ============================================================
@@ -225,21 +226,46 @@ def cut_media(input_path, keep_segments, output_path, is_video, fade_sec=0.02):
 
     map_stream = "[out]"
 
-    cmd = [
-        "ffmpeg", "-y", "-loglevel", "error",
-        "-i", input_path,
-        "-filter_complex", filter_complex,
-        "-map", map_stream,
-    ]
+    # Write the filter graph to a temp file rather than passing it
+    # directly on the command line. Videos with many kept segments
+    # (i.e. many detected pauses) produce a very long filter string --
+    # long enough to exceed Windows' ~32,767-character command-line
+    # limit (surfaces as "WinError 206: filename or extension too
+    # long"). Linux/macOS allow much longer command lines and never
+    # hit this, which is why this only shows up on some machines/
+    # videos and not others. Using -filter_complex_script sidesteps
+    # the limit entirely, on every platform, with identical output.
+    filter_script_fd, filter_script_path = tempfile.mkstemp(
+        suffix=".txt",
+        prefix="ffmpeg_filter_",
+        text=True,
+    )
 
-    if is_video:
-        cmd += ["-an", "-c:v", "libx264", "-preset", "fast", "-crf", "18"]
-    else:
-        cmd += ["-c:a", "pcm_s16le", "-ar", "48000"]
+    try:
+        with os.fdopen(filter_script_fd, "w", encoding="utf-8") as f:
+            f.write(filter_complex)
 
-    cmd.append(output_path)
+        cmd = [
+            "ffmpeg", "-y", "-loglevel", "error",
+            "-i", input_path,
+            "-filter_complex_script", filter_script_path,
+            "-map", map_stream,
+        ]
 
-    run(cmd)
+        if is_video:
+            cmd += ["-an", "-c:v", "libx264", "-preset", "fast", "-crf", "18"]
+        else:
+            cmd += ["-c:a", "pcm_s16le", "-ar", "48000"]
+
+        cmd.append(output_path)
+
+        run(cmd)
+
+    finally:
+        try:
+            os.remove(filter_script_path)
+        except OSError:
+            pass
 
 
 # ============================================================
